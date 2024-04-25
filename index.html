@@ -26,6 +26,10 @@
     <select id="select-camera"></select>
   </label>
   <label>
+    Microphone:
+    <select id="select-microphone"></select>
+  </label>
+  <label>
     Resolution:
     <select id="select-resolution">
       <option value="640x480">640x480</option>
@@ -42,10 +46,18 @@
   <script type="text/javascript">
     let cameraEnhancer;
     let cameras = [];
+    let microphones = [];
     window.onload = async function(){
       let cameraView = await Dynamsoft.DCE.CameraView.createInstance(document.getElementById("enhancerUIContainer"));
       cameraEnhancer = await Dynamsoft.DCE.CameraEnhancer.createInstance(cameraView); //bind the view to the enhancer
       await listCameras();
+      try {
+        await requestMicroPhonePermission();
+        await listMicrophones();  
+      } catch (error) {
+        alert("Microphones not found.");
+      }
+      
     }
 
     async function listCameras(){
@@ -66,6 +78,33 @@
       await cameraEnhancer.setResolution({width:width, height:height});
       await cameraEnhancer.open();
     }
+
+    async function listMicrophones(){
+      let microphoneSelect = document.getElementById("select-microphone");
+      let allDevices = await navigator.mediaDevices.enumerateDevices();
+      for (var i=0;i<allDevices.length;i++){
+        var device = allDevices[i];
+        if (device.kind == 'audioinput'){
+          microphones.push(device);
+          cameraSelect.appendChild(new Option(device.label,device.deviceId));
+        }
+      }
+    }
+
+    async function requestMicroPhonePermission() {
+      try {
+        const constraints = {video: false, audio: true};
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const tracks = stream.getTracks();
+        for (let i=0;i<tracks.length;i++) {
+          const track = tracks[i];
+          track.stop();  // stop the opened tracks
+        }
+      } catch (error) {
+        throw error;
+      }
+    }
+
   </script>
 </body>
 </html>
