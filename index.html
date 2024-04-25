@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Take a Photo with Your Voice</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=0" />
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-camera-enhancer@4.0.2/dist/dce.js"></script>
+  <style>
+  </style>
+</head>
+<body>
+  <h2>Take a Photo with Your Voice</h2>
+  <label>
+    Camera:
+    <select id="select-camera"></select>
+  </label>
+  <label>
+    Resolution:
+    <select id="select-resolution">
+      <option value="640x480">640x480</option>
+      <option value="1280x720">1280x720</option>
+      <option value="1920x1080" selected>1920x1080</option>
+      <option value="3840x2160">3840x2160</option>
+    </select>
+  </label>
+  <div id="enhancerUIContainer" class="main-view">
+    <div class="dce-video-container"></div>
+  </div>
+  <script type="text/javascript">
+  </script>
+</body>
+</html>
