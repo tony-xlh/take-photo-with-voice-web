@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Take a Photo with Your Voice</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=0" />
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-core@3.0.33/dist/core.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-camera-enhancer@4.0.2/dist/dce.js"></script>
+  <style>
+    #enhancerUIContainer {
+      height: 150px;
+      width: 300px;
+      position: relative;
+    }
+
+    .dce-video-container {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+    }
+  </style>
+</head>
+<body>
+  <h2>Take a Photo with Your Voice</h2>
+  <label>
+    Camera:
+    <select id="select-camera"></select>
+  </label>
+  <label>
+    Microphone:
+    <select id="select-microphone"></select>
+  </label>
+  <label>
+    Resolution:
+    <select id="select-resolution">
+      <option value="640x480">640x480</option>
+      <option value="1280x720">1280x720</option>
+      <option value="1920x1080" selected>1920x1080</option>
+      <option value="3840x2160">3840x2160</option>
+    </select>
+  </label>
+  <button onclick="startCamera();">Start Camera</button>
+  <div id="enhancerUIContainer" class="main-view">
+    <div class="dce-video-container"></div>
+  </div>
+  
+  <script type="text/javascript">
+    let cameraEnhancer;
+    let cameras = [];
+    let microphones = [];
+    window.onload = async function(){
+      let cameraView = await Dynamsoft.DCE.CameraView.createInstance(document.getElementById("enhancerUIContainer"));
+      cameraEnhancer = await Dynamsoft.DCE.CameraEnhancer.createInstance(cameraView); //bind the view to the enhancer
+      await listCameras();
+      try {
+        await requestMicroPhonePermission();
+        await listMicrophones();  
+      } catch (error) {
+        alert("Microphones not found.");
+      }
+      
+    }
+
+    async function listCameras(){
+      let cameraSelect = document.getElementById("select-camera");
+      cameras = await cameraEnhancer.getAllCameras();
+      for (let index = 0; index < cameras.length; index++) {
+        const camera = cameras[index];
+        cameraSelect.appendChild(new Option(camera.label,camera.deviceId));
+      }
+    }
+
+    async function startCamera(){
+      let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
+      let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
+      let width = parseInt(selectedResolution.split("x")[0]);
+      let height = parseInt(selectedResolution.split("x")[1]);
+      await cameraEnhancer.selectCamera(selectedCamera);
+      await cameraEnhancer.setResolution({width:width, height:height});
+      await cameraEnhancer.open();
+    }
+
+    async function listMicrophones(){
+      let microphoneSelect = document.getElementById("select-microphone");
+      let allDevices = await navigator.mediaDevices.enumerateDevices();
+      for (var i=0;i<allDevices.length;i++){
+        var device = allDevices[i];
+        if (device.kind == 'audioinput'){
+          microphones.push(device);
+          cameraSelect.appendChild(new Option(device.label,device.deviceId));
+        }
+      }
+    }
+
+    async function requestMicroPhonePermission() {
+      try {
+        const constraints = {video: false, audio: true};
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const tracks = stream.getTracks();
+        for (let i=0;i<tracks.length;i++) {
+          const track = tracks[i];
+          track.stop();  // stop the opened tracks
+        }
+      } catch (error) {
+        throw error;
+      }
+    }
+
+  </script>
+</body>
+</html>
