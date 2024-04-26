@@ -22,6 +22,14 @@
       width: 150px;
       height: 150px;
     }
+
+    .output {
+      display: flex;
+    }
+    
+    .visuals {
+      margin-left: 10px;
+    }
   </style>
 </head>
 <body>
@@ -45,7 +53,7 @@
   </label>
   <button onclick="startCameraAndMicrophone();">Start</button>
   <button onclick="analyse();">Analyse</button>
-  <div>
+  <div class="output">
     <div class="devices">
       <div id="enhancerUIContainer" class="main-view">
         <div class="dce-video-container"></div>
