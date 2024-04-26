@@ -17,6 +17,19 @@
       height: 100%;
       position: absolute;
     }
+
+    #oscilloscope {
+      width: 150px;
+      height: 150px;
+    }
+
+    .output {
+      display: flex;
+    }
+    
+    .visuals {
+      margin-left: 10px;
+    }
   </style>
 </head>
 <body>
@@ -38,10 +51,22 @@
       <option value="3840x2160">3840x2160</option>
     </select>
   </label>
-  <button onclick="startCamera();">Start Camera</button>
-  <div id="enhancerUIContainer" class="main-view">
-    <div class="dce-video-container"></div>
+  <button onclick="startCameraAndMicrophone();">Start</button>
+  <button onclick="analyse();">Analyse</button>
+  <div class="output">
+    <div class="devices">
+      <div id="enhancerUIContainer" class="main-view">
+        <div class="dce-video-container"></div>
+      </div>
+      <div>
+        <audio autoplay controls id="audio"></audio>
+      </div>
+    </div>
+    <div class="visuals">
+      <canvas id="oscilloscope"></canvas>
+    </div>
   </div>
+  
   
   <script type="text/javascript">
     let cameraEnhancer;
@@ -69,7 +94,7 @@
       }
     }
 
-    async function startCamera(){
+    async function startCameraAndMicrophone(){
       let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
       let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
       let width = parseInt(selectedResolution.split("x")[0]);
@@ -77,6 +102,11 @@
       await cameraEnhancer.selectCamera(selectedCamera);
       await cameraEnhancer.setResolution({width:width, height:height});
       await cameraEnhancer.open();
+      let selectedMicrophone = microphones[document.getElementById("select-microphone").selectedIndex];
+      closeStream(document.getElementById("audio").srcObject);
+      const constraints = {video: false, audio: {deviceId: selectedMicrophone}};
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      document.getElementById("audio").srcObject = stream;
     }
 
     async function listMicrophones(){
@@ -86,7 +116,7 @@
         var device = allDevices[i];
         if (device.kind == 'audioinput'){
           microphones.push(device);
-          cameraSelect.appendChild(new Option(device.label,device.deviceId));
+          microphoneSelect.appendChild(new Option(device.label,device.deviceId));
         }
       }
     }
@@ -95,16 +125,75 @@
       try {
         const constraints = {video: false, audio: true};
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        closeStream(stream);
+      } catch (error) {
+        console.log(error);
+        throw error;
+      }
+    }
+
+    function closeStream(stream){
+      if (stream) {
         const tracks = stream.getTracks();
         for (let i=0;i<tracks.length;i++) {
           const track = tracks[i];
           track.stop();  // stop the opened tracks
         }
-      } catch (error) {
-        throw error;
       }
     }
 
+    function analyse(){
+      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var analyser = audioCtx.createAnalyser();
+      var stream = document.getElementById("audio").srcObject;
+      var source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      analyser.fftSize = 2048;
+      var bufferLength = analyser.frequencyBinCount;
+      var dataArray = new Uint8Array(bufferLength);
+      analyser.getByteTimeDomainData(dataArray);
+
+      var canvas = document.getElementById("oscilloscope");
+      var canvasCtx = canvas.getContext("2d");
+
+      function draw() {
+        
+        drawVisual = requestAnimationFrame(draw);
+
+        analyser.getByteTimeDomainData(dataArray);
+        console.log("draw");
+        console.log(dataArray);
+
+        canvasCtx.fillStyle = "rgb(200, 200, 200)";
+        canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+        canvasCtx.lineWidth = 2;
+        canvasCtx.strokeStyle = "rgb(0, 0, 0)";
+
+        canvasCtx.beginPath();
+
+        var sliceWidth = (canvas.width * 1.0) / bufferLength;
+        var x = 0;
+
+        for (var i = 0; i < bufferLength; i++) {
+          var v = dataArray[i] / 128.0;
+          var y = (v * canvas.height) / 2;
+
+          if (i === 0) {
+            canvasCtx.moveTo(x, y);
+          } else {
+            canvasCtx.lineTo(x, y);
+          }
+
+          x += sliceWidth;
+        }
+
+        canvasCtx.lineTo(canvas.width, canvas.height / 2);
+        canvasCtx.stroke();
+      }
+      draw();
+    }
+     
   </script>
 </body>
 </html>
