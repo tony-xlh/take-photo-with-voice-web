@@ -38,9 +38,12 @@
       <option value="3840x2160">3840x2160</option>
     </select>
   </label>
-  <button onclick="startCamera();">Start Camera</button>
+  <button onclick="startCameraAndMicrophone();">Start</button>
   <div id="enhancerUIContainer" class="main-view">
     <div class="dce-video-container"></div>
+  </div>
+  <div>
+    <audio autoplay controls id="audio"></audio>
   </div>
   
   <script type="text/javascript">
@@ -69,7 +72,7 @@
       }
     }
 
-    async function startCamera(){
+    async function startCameraAndMicrophone(){
       let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
       let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
       let width = parseInt(selectedResolution.split("x")[0]);
@@ -77,6 +80,11 @@
       await cameraEnhancer.selectCamera(selectedCamera);
       await cameraEnhancer.setResolution({width:width, height:height});
       await cameraEnhancer.open();
+      let selectedMicrophone = microphones[document.getElementById("select-microphone").selectedIndex];
+      closeStream(document.getElementById("audio").srcObject);
+      const constraints = {video: false, audio: {deviceId: selectedMicrophone}};
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      document.getElementById("audio").srcObject = stream;
     }
 
     async function listMicrophones(){
@@ -86,7 +94,7 @@
         var device = allDevices[i];
         if (device.kind == 'audioinput'){
           microphones.push(device);
-          cameraSelect.appendChild(new Option(device.label,device.deviceId));
+          microphoneSelect.appendChild(new Option(device.label,device.deviceId));
         }
       }
     }
@@ -95,13 +103,20 @@
       try {
         const constraints = {video: false, audio: true};
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        closeStream(stream);
+      } catch (error) {
+        console.log(error);
+        throw error;
+      }
+    }
+
+    function closeStream(stream){
+      if (stream) {
         const tracks = stream.getTracks();
         for (let i=0;i<tracks.length;i++) {
           const track = tracks[i];
           track.stop();  // stop the opened tracks
         }
-      } catch (error) {
-        throw error;
       }
     }
 
