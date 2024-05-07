@@ -3,19 +3,10 @@
 <head>
   <title>Take a Photo with Your Voice</title>
   <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=0" />
-  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-core@3.0.33/dist/core.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-camera-enhancer@4.0.2/dist/dce.js"></script>
   <style>
-    #enhancerUIContainer {
+    #video {
       height: 150px;
       width: 300px;
-      position: relative;
-    }
-
-    .dce-video-container {
-      width: 100%;
-      height: 100%;
-      position: absolute;
     }
 
     #oscilloscope {
@@ -55,8 +46,8 @@
   <button onclick="analyse();">Analyse</button>
   <div class="output">
     <div class="devices">
-      <div id="enhancerUIContainer" class="main-view">
-        <div class="dce-video-container"></div>
+      <div>
+        <video controls autoplay playsinline id="video"></video>
       </div>
       <div>
         <audio autoplay controls id="audio"></audio>
@@ -69,12 +60,10 @@
   
   
   <script type="text/javascript">
-    let cameraEnhancer;
     let cameras = [];
     let microphones = [];
     window.onload = async function(){
-      let cameraView = await Dynamsoft.DCE.CameraView.createInstance(document.getElementById("enhancerUIContainer"));
-      cameraEnhancer = await Dynamsoft.DCE.CameraEnhancer.createInstance(cameraView); //bind the view to the enhancer
+      await requestCameraPermission();
       await listCameras();
       try {
         await requestMicroPhonePermission();
@@ -82,31 +71,35 @@
       } catch (error) {
         alert("Microphones not found.");
       }
-      
     }
 
     async function listCameras(){
       let cameraSelect = document.getElementById("select-camera");
-      cameras = await cameraEnhancer.getAllCameras();
-      for (let index = 0; index < cameras.length; index++) {
-        const camera = cameras[index];
-        cameraSelect.appendChild(new Option(camera.label,camera.deviceId));
+      let allDevices = await navigator.mediaDevices.enumerateDevices();
+      for (let i = 0; i < allDevices.length; i++){
+        let device = allDevices[i];
+        if (device.kind == 'videoinput'){
+          cameras.push(device);
+          cameraSelect.appendChild(new Option(device.label,device.deviceId));
+        }
       }
     }
 
     async function startCameraAndMicrophone(){
       let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
+      closeStream(document.getElementById("video").srcObject);
       let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
       let width = parseInt(selectedResolution.split("x")[0]);
       let height = parseInt(selectedResolution.split("x")[1]);
-      await cameraEnhancer.selectCamera(selectedCamera);
-      await cameraEnhancer.setResolution({width:width, height:height});
-      await cameraEnhancer.open();
+      const videoConstraints = {video: {deviceId: selectedCamera}, audio: false};
+      const cameraStream = await navigator.mediaDevices.getUserMedia(videoConstraints);
+      document.getElementById("video").srcObject = cameraStream;
+
       let selectedMicrophone = microphones[document.getElementById("select-microphone").selectedIndex];
       closeStream(document.getElementById("audio").srcObject);
-      const constraints = {video: false, audio: {deviceId: selectedMicrophone}};
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      document.getElementById("audio").srcObject = stream;
+      const audioConstraints = {video: false, audio: {deviceId: selectedMicrophone}};
+      const audioStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
+      document.getElementById("audio").srcObject = audioStream;
     }
 
     async function listMicrophones(){
@@ -118,6 +111,17 @@
           microphones.push(device);
           microphoneSelect.appendChild(new Option(device.label,device.deviceId));
         }
+      }
+    }
+
+    async function requestCameraPermission() {
+      try {
+        const constraints = {video: true, audio: false};
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        closeStream(stream);
+      } catch (error) {
+        console.log(error);
+        throw error;
       }
     }
 
