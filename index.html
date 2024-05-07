@@ -16,6 +16,7 @@
 
     .output {
       display: flex;
+      flex-wrap: wrap;
     }
     
     .visuals {
@@ -74,6 +75,7 @@
     let smoothingCountThreshold = 5;
     let analyser;
     let audioCtx;
+    let photoTakenTime = 0;
     window.onload = async function(){
       await requestCameraPermission();
       await listCameras();
@@ -265,6 +267,12 @@
     }
 
     function takePhoto(){
+      let currentTime = Date.now();
+      if (currentTime - photoTakenTime < 1000*2) {
+        console.log("within 2 seconds since last capture");
+        return;
+      }
+      photoTakenTime = currentTime;
       let video = document.getElementById("video");
       let canvas = document.createElement("canvas");
       let w = video.videoWidth;

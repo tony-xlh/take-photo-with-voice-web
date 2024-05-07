@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Scan Documents with Your Voice</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=0" />
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-core@3.0.30/dist/core.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-license@3.0.20/dist/license.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-document-normalizer@2.0.20/dist/ddn.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-capture-vision-router@2.0.30/dist/cvr.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-document-viewer@1.1.0/dist/ddv.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dynamsoft-document-viewer@1.1.0/dist/ddv.css">
+  <style>
+    #audio {
+      display: none;
+    }
+
+    #container {
+      max-width: 100%;
+      height: 480px;
+    }
+
+    .voice-icon {
+      background-image: url("./voice.svg");
+      background-position: top;
+      background-size: contain;
+      background-repeat: no-repeat;
+      filter: invert(1);
+    }
+
+    .voice-icon.enabled {
+      filter: invert(1) sepia(100%) saturate(100) hue-rotate(1400deg);
+    }
+  </style>
+</head>
+<body>
+  <h2>Scan Documents with Your Voice</h2>
+  <label>
+    Camera:
+    <select id="select-camera"></select>
+  </label>
+  <label>
+    Microphone:
+    <select id="select-microphone"></select>
+  </label>
+  <label>
+    Resolution:
+    <select id="select-resolution">
+      <option value="640x480">640x480</option>
+      <option value="1280x720">1280x720</option>
+      <option value="1920x1080" selected>1920x1080</option>
+      <option value="3840x2160">3840x2160</option>
+    </select>
+  </label>
+  <button onclick="startScanning();">Start</button>
+  <div id="container"></div>
+  <audio autoplay controls id="audio"></audio>
+  <script type="text/javascript">
+    let cameras = [];
+    let microphones = [];
+    let previousValueToDisplay = 0;
+    let smoothingCount = 0;
+    let smoothingThreshold = 10;
+    let smoothingCountThreshold = 5;
+    let analyser;
+    let audioCtx;
+    let photoTakenTime = 0;
+    let captureViewer;
+    let perspectiveViewer;
+    let editViewer;
+    let interval;
+    let processing = false;
+    window.onload = async function(){
+      await initMobileWebCapture();
+      await requestCameraPermission();
+      await listCameras();
+      try {
+        await requestMicroPhonePermission();
+        await listMicrophones();  
+      } catch (error) {
+        alert("Microphones not found.");
+      }
+    }
+
+    async function initMobileWebCapture(){
+      Dynamsoft.Core.CoreModule.loadWasm(["DDN"]);
+      Dynamsoft.DDV.Core.loadWasm();
+
+      // Initialize DDN
+      await Dynamsoft.License.LicenseManager.initLicense(
+        "DLS2eyJoYW5kc2hha2VDb2RlIjoiMTAwMjI3NzYzLVRYbFhaV0pRY205cSIsIm1haW5TZXJ2ZXJVUkwiOiJodHRwczovL21sdHMuZHluYW1zb2Z0LmNvbSIsIm9yZ2FuaXphdGlvbklEIjoiMTAwMjI3NzYzIiwic3RhbmRieVNlcnZlclVSTCI6Imh0dHBzOi8vc2x0cy5keW5hbXNvZnQuY29tIiwiY2hlY2tDb2RlIjotMzg1NjA5MTcyfQ==",
+        true
+      );
+      // Initialize DDV
+      await Dynamsoft.DDV.Core.init();
+      async function initDocDetectModule(DDV, CVR) {
+        const router = await CVR.CaptureVisionRouter.createInstance();
+
+        class DDNNormalizeHandler extends DDV.DocumentDetect {
+          async detect(image, config) {
+            if (!router) {
+              return Promise.resolve({
+                success: false
+              });
+            };
+    
+            let width = image.width;
+            let height = image.height;
+            let ratio = 1;
+            let data;
+    
+            if (height > 720) {
+              ratio = height / 720;
+              height = 720;
+              width = Math.floor(width / ratio);
+              data = compress(image.data, image.width, image.height, width, height);
+            } else {
+              data = image.data.slice(0);
+            }
+    
+    
+            // Define DSImage according to the usage of DDN
+            const DSImage = {
+              bytes: new Uint8Array(data),
+              width,
+              height,
+              stride: width * 4, //RGBA
+              format: 10 // IPF_ABGR_8888
+            };
+    
+            // Use DDN normalized module
+            const results = await router.capture(DSImage, 'detect-document-boundaries');
+    
+            // Filter the results and generate corresponding return values
+            if (results.items.length <= 0) {
+              return Promise.resolve({
+                success: false
+              });
+            };
+    
+            const quad = [];
+            results.items[0].location.points.forEach((p) => {
+              quad.push([p.x * ratio, p.y * ratio]);
+            });
+    
+            const detectResult = this.processDetectResult({
+              location: quad,
+              width: image.width,
+              height: image.height,
+              config
+            });
+            return Promise.resolve(detectResult);
+          }
+        }
+        DDV.setProcessingHandler('documentBoundariesDetect', new DDNNormalizeHandler())
+      }
+
+      function compress(
+          imageData,
+          imageWidth,
+          imageHeight,
+          newWidth,
+          newHeight,
+      ) {
+        let source = null;
+        try {
+            source = new Uint8ClampedArray(imageData);
+        } catch (error) {
+            source = new Uint8Array(imageData);
+        }
+      
+        const scaleW = newWidth / imageWidth;
+        const scaleH = newHeight / imageHeight;
+        const targetSize = newWidth * newHeight * 4;
+        const targetMemory = new ArrayBuffer(targetSize);
+        let distData = null;
+      
+        try {
+            distData = new Uint8ClampedArray(targetMemory, 0, targetSize);
+        } catch (error) {
+            distData = new Uint8Array(targetMemory, 0, targetSize);
+        }
+      
+        const filter = (distCol, distRow) => {
+            const srcCol = Math.min(imageWidth - 1, distCol / scaleW);
+            const srcRow = Math.min(imageHeight - 1, distRow / scaleH);
+            const intCol = Math.floor(srcCol);
+            const intRow = Math.floor(srcRow);
+      
+            let distI = (distRow * newWidth) + distCol;
+            let srcI = (intRow * imageWidth) + intCol;
+      
+            distI *= 4;
+            srcI *= 4;
+      
+            for (let j = 0; j <= 3; j += 1) {
+                distData[distI + j] = source[srcI + j];
+            }
+        };
+      
+        for (let col = 0; col < newWidth; col += 1) {
+            for (let row = 0; row < newHeight; row += 1) {
+                filter(col, row);
+            }
+        }
+      
+        return distData;
+      }
+      // Configure document boundaries function
+      await initDocDetectModule(Dynamsoft.DDV, Dynamsoft.CVR);
+
+      // Configure image filter feature which is in edit viewer
+      Dynamsoft.DDV.setProcessingHandler("imageFilter", new Dynamsoft.DDV.ImageFilter());
+      const captureViewerUiConfig = {
+          type: Dynamsoft.DDV.Elements.Layout,
+          flexDirection: "column",
+          children: [
+              {
+                  type: Dynamsoft.DDV.Elements.Layout,
+                  className: "ddv-capture-viewer-header-mobile",
+                  children: [
+                      {
+                          type: "CameraResolution",
+                          className: "ddv-capture-viewer-resolution",
+                      },
+                      {
+                        type: Dynamsoft.DDV.Elements.Button,
+                        className: "voice-icon",
+                        style: {
+                          display: "flex",
+                        },
+                        events: {
+                          click: "enableVoiceDetection",
+                        },
+                      },
+                      Dynamsoft.DDV.Elements.Flashlight,
+                  ],
+              },
+              Dynamsoft.DDV.Elements.MainView,
+              {
+                  type: Dynamsoft.DDV.Elements.Layout,
+                  className: "ddv-capture-viewer-footer-mobile",
+                  children: [
+                      Dynamsoft.DDV.Elements.AutoDetect,
+                      Dynamsoft.DDV.Elements.AutoCapture,
+                      {
+                          type: "Capture",
+                          className: "ddv-capture-viewer-captureButton",
+                      },
+                      {
+                          // Bind click event to "ImagePreview" element
+                          // The event will be registered later.
+                          type: Dynamsoft.DDV.Elements.ImagePreview,
+                          events:{ 
+                              click: "showPerspectiveViewer"
+                          }
+                      },
+                      Dynamsoft.DDV.Elements.CameraConvert,
+                  ],
+              },
+          ],
+      };
+
+
+      const perspectiveUiConfig = {
+          type: Dynamsoft.DDV.Elements.Layout,
+          flexDirection: "column",
+          children: [
+              {
+                  type: Dynamsoft.DDV.Elements.Layout,
+                  className: "ddv-perspective-viewer-header-mobile",
+                  children: [
+                      {
+                          // Add a "Back" button in perspective viewer's header and bind the event to go back to capture viewer.
+                          // The event will be registered later.
+                          type: Dynamsoft.DDV.Elements.Button,
+                          className: "ddv-button-back",
+                          events:{
+                              click: "backToCaptureViewer"
+                          }
+                      },
+                      Dynamsoft.DDV.Elements.Pagination,
+                      {   
+                          // Bind event for "PerspectiveAll" button to show the edit viewer
+                          // The event will be registered later.
+                          type: Dynamsoft.DDV.Elements.PerspectiveAll,
+                          events:{
+                              click: "showEditViewer"
+                          }
+                      },
+                  ],
+              },
+              Dynamsoft.DDV.Elements.MainView,
+              {
+                  type: Dynamsoft.DDV.Elements.Layout,
+                  className: "ddv-perspective-viewer-footer-mobile",
+                  children: [
+                      Dynamsoft.DDV.Elements.FullQuad,
+                      Dynamsoft.DDV.Elements.RotateLeft,
+                      Dynamsoft.DDV.Elements.RotateRight,
+                      Dynamsoft.DDV.Elements.DeleteCurrent,
+                      Dynamsoft.DDV.Elements.DeleteAll,
+                  ],
+              },
+          ],
+      };
+
+      const editViewerUiConfig = {
+          type: Dynamsoft.DDV.Elements.Layout,
+          flexDirection: "column",
+          className: "ddv-edit-viewer-mobile",
+          children: [
+              {
+                  type: Dynamsoft.DDV.Elements.Layout,
+                  className: "ddv-edit-viewer-header-mobile",
+                  children: [
+                      {
+                          // Add a "Back" buttom to header and bind click event to go back to the perspective viewer
+                          // The event will be registered later.
+                          type: Dynamsoft.DDV.Elements.Button,
+                          className: "ddv-button-back",
+                          events:{
+                              click: "backToPerspectiveViewer"
+                          }
+                      },
+                      Dynamsoft.DDV.Elements.Pagination,
+                      Dynamsoft.DDV.Elements.Download,
+                  ],
+              },
+              Dynamsoft.DDV.Elements.MainView,
+              {
+                  type: Dynamsoft.DDV.Elements.Layout,
+                  className: "ddv-edit-viewer-footer-mobile",
+                  children: [
+                      Dynamsoft.DDV.Elements.DisplayMode,
+                      Dynamsoft.DDV.Elements.RotateLeft,
+                      Dynamsoft.DDV.Elements.Crop,
+                      Dynamsoft.DDV.Elements.Filter,
+                      Dynamsoft.DDV.Elements.Undo,
+                      Dynamsoft.DDV.Elements.Delete,
+                      Dynamsoft.DDV.Elements.Load,
+                  ],
+              },
+          ],
+      };
+      // Create a capture viewer
+      captureViewer = new Dynamsoft.DDV.CaptureViewer({
+          container: "container",
+          uiConfig: captureViewerUiConfig,
+          viewerConfig: {
+              acceptedPolygonConfidence: 60,
+              enableAutoDetect: true,
+          }
+      });
+
+      // Register an event in `captureViewer` to show the perspective viewer
+      captureViewer.on("showPerspectiveViewer",() => {
+          switchViewer(0,1,0);
+      });
+
+      captureViewer.on("enableVoiceDetection",e => {
+        console.log("click");
+        let icon = document.getElementsByClassName("voice-icon")[0];
+        if (icon.classList.contains("enabled")) {
+          icon.classList.remove("enabled");
+          toggleVoiceDetection(false);
+        }else{
+          icon.classList.add("enabled");
+          toggleVoiceDetection(true);
+        }
+      });
+
+      // Create a perspective viewer
+      perspectiveViewer = new Dynamsoft.DDV.PerspectiveViewer({
+          container: "container",
+          groupUid: captureViewer.groupUid,
+          uiConfig: perspectiveUiConfig,
+          viewerConfig: {
+              scrollToLatest: true,
+          }
+      });
+
+      perspectiveViewer.hide();
+
+      // Register an event in `perspectiveViewer` to go back the capture viewer
+      perspectiveViewer.on("backToCaptureViewer",() => {
+          switchViewer(1,0,0);
+          captureViewer.play().catch(err => {alert(err.message)});
+      });
+
+      // Register an event in `perspectiveViewer` to show the edit viewer
+      perspectiveViewer.on("showEditViewer",() => {
+          switchViewer(0,0,1)
+      });
+      
+      // Create an edit viewer
+      editViewer = new Dynamsoft.DDV.EditViewer({
+          container: "container",
+          groupUid: captureViewer.groupUid,
+          uiConfig: editViewerUiConfig
+      });
+
+      editViewer.hide();
+
+      // Register an event in `editViewer` to go back the perspective viewer
+      editViewer.on("backToPerspectiveViewer",() => {
+          switchViewer(0,1,0);
+      });
+
+      // Define a function to control the viewers' visibility
+      const switchViewer = (c,p,e) => {
+          captureViewer.hide();
+          perspectiveViewer.hide();
+          editViewer.hide();
+
+          if(c) {
+              captureViewer.show();
+          } else {
+              captureViewer.stop();
+          }
+          
+          if(p) perspectiveViewer.show();
+          if(e) editViewer.show();
+      };
+    }
+
+    async function listCameras(){
+      let cameraSelect = document.getElementById("select-camera");
+      let allDevices = await navigator.mediaDevices.enumerateDevices();
+      for (let i = 0; i < allDevices.length; i++){
+        let device = allDevices[i];
+        if (device.kind == 'videoinput'){
+          cameras.push(device);
+          cameraSelect.appendChild(new Option(device.label,device.deviceId));
+        }
+      }
+    }
+
+    async function startScanning(){
+      let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
+      await captureViewer.selectCamera(selectedCamera.deviceId);
+      let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
+      let width = parseInt(selectedResolution.split("x")[0]);
+      let height = parseInt(selectedResolution.split("x")[1]);
+      // Play video stream in 1080P
+      captureViewer.play({
+        resolution: [width,height],
+      }).catch(err => {
+        alert(err.message)
+      });
+    }
+
+    async function toggleVoiceDetection(enabled){
+      let audio = document.getElementById("audio");
+      if (enabled) {
+        if (!audio.srcObject) {
+          let selectedMicrophone = microphones[document.getElementById("select-microphone").selectedIndex];
+          const audioConstraints = {video: false, audio: {deviceId: selectedMicrophone}};
+          const audioStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
+          audio.srcObject = audioStream;
+          startVoiceDetection();
+        }
+      }else{
+        stopVoiceDetection();
+        closeStream(audio.srcObject);
+        audio.srcObject = null
+      }
+    }
+
+    async function listMicrophones(){
+      let microphoneSelect = document.getElementById("select-microphone");
+      let allDevices = await navigator.mediaDevices.enumerateDevices();
+      for (let i=0;i<allDevices.length;i++){
+        let device = allDevices[i];
+        if (device.kind == 'audioinput'){
+          microphones.push(device);
+          microphoneSelect.appendChild(new Option(device.label,device.deviceId));
+        }
+      }
+    }
+
+    async function requestCameraPermission() {
+      try {
+        const constraints = {video: true, audio: false};
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        closeStream(stream);
+      } catch (error) {
+        console.log(error);
+        throw error;
+      }
+    }
+
+    async function requestMicroPhonePermission() {
+      try {
+        const constraints = {video: false, audio: true};
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        closeStream(stream);
+      } catch (error) {
+        console.log(error);
+        throw error;
+      }
+    }
+
+    function closeStream(stream){
+      if (stream) {
+        const tracks = stream.getTracks();
+        for (let i=0;i<tracks.length;i++) {
+          const track = tracks[i];
+          track.stop();  // stop the opened tracks
+        }
+      }
+    }
+
+    function startVoiceDetection(){
+      if (!document.getElementById("audio").srcObject){
+        return;
+      }
+      stopVoiceDetection();
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioCtx.createAnalyser();
+      let stream = document.getElementById("audio").srcObject;
+      let source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      analyser.fftSize = 2048;
+
+      const analyse = () => {
+        processing = true;
+        let bufferLength = analyser.fftSize;
+        let buffer = new Float32Array(bufferLength);
+        analyser.getFloatTimeDomainData(buffer);
+        let autoCorrelateValue = autoCorrelate(buffer, audioCtx.sampleRate);
+        processing = false;
+        console.log("autoCorrelateValue:");
+        console.log(autoCorrelateValue);
+        if (autoCorrelateValue === -1) {
+          //'Too quiet...';
+          return;
+        }
+        // Handle rounding
+        let valueToDisplay = autoCorrelateValue;
+        valueToDisplay = Math.round(valueToDisplay);
+        function noteIsSimilarEnough() {
+          // Check threshold for number, or just difference for notes.
+          let diff = Math.abs(valueToDisplay - previousValueToDisplay);
+          return diff < smoothingThreshold;
+        }
+        // Check if this value has been within the given range for n iterations
+        if (noteIsSimilarEnough()) {
+          if (smoothingCount < smoothingCountThreshold) {
+            smoothingCount++;
+            console.log("threshold not meet");
+            return;
+          } else {
+            previousValueToDisplay = valueToDisplay;
+            smoothingCount = 0;
+          }
+        } else {
+          previousValueToDisplay = valueToDisplay;
+          smoothingCount = 0;
+          console.log("not similar");
+          return;
+        }
+        console.log("take photo");
+        takePhoto();
+      }
+      interval = setInterval(analyse,0)
+    }
+
+    function stopVoiceDetection(){
+      processing = false;
+      previousValueToDisplay = 0;
+      clearInterval(interval);
+    }
+
+    async function takePhoto(){
+      let currentTime = Date.now();
+      if (currentTime - photoTakenTime < 1000*2) {
+        console.log("within 2 seconds since last capture");
+        return;
+      }
+      await captureViewer.capture();
+      photoTakenTime = currentTime;
+    }
+    
+    // Must be called on analyser.getFloatTimeDomainData and audioContext.sampleRate
+    // From https://github.com/cwilso/PitchDetect/pull/23
+    function autoCorrelate(buffer, sampleRate) {
+      // Perform a quick root-mean-square to see if we have enough signal
+      let SIZE = buffer.length;
+      let sumOfSquares = 0;
+      for (let i = 0; i < SIZE; i++) {
+        let val = buffer[i];
+        sumOfSquares += val * val;
+      }
+      let rootMeanSquare = Math.sqrt(sumOfSquares / SIZE)
+      if (rootMeanSquare < 0.01) {
+        return -1;
+      }
+
+      // Find a range in the buffer where the values are below a given threshold.
+      let r1 = 0;
+      let r2 = SIZE - 1;
+      let threshold = 0.2;
+
+      // Walk up for r1
+      for (let i = 0; i < SIZE / 2; i++) {
+        if (Math.abs(buffer[i]) < threshold) {
+          r1 = i;
+          break;
+        }
+      }
+
+      // Walk down for r2
+      for (let i = 1; i < SIZE / 2; i++) {
+        if (Math.abs(buffer[SIZE - i]) < threshold) {
+          r2 = SIZE - i;
+          break;
+        }
+      }
+
+      // Trim the buffer to these ranges and update SIZE.
+      buffer = buffer.slice(r1, r2);
+      SIZE = buffer.length
+
+      // Create a new array of the sums of offsets to do the autocorrelation
+      let c = new Array(SIZE).fill(0);
+      // For each potential offset, calculate the sum of each buffer value times its offset value
+      for (let i = 0; i < SIZE; i++) {
+        for (let j = 0; j < SIZE - i; j++) {
+          c[i] = c[i] + buffer[j] * buffer[j+i]
+        }
+      }
+
+      // Find the last index where that value is greater than the next one (the dip)
+      let d = 0;
+      while (c[d] > c[d+1]) {
+        d++;
+      }
+
+      // Iterate from that index through the end and find the maximum sum
+      let maxValue = -1;
+      let maxIndex = -1;
+      for (let i = d; i < SIZE; i++) {
+        if (c[i] > maxValue) {
+          maxValue = c[i];
+          maxIndex = i;
+        }
+      }
+
+      let T0 = maxIndex;
+
+      // Not as sure about this part, don't @ me
+      // From the original author:
+      // interpolation is parabolic interpolation. It helps with precision. We suppose that a parabola pass through the
+      // three points that comprise the peak. 'a' and 'b' are the unknowns from the linear equation system and b/(2a) is
+      // the "error" in the abscissa. Well x1,x2,x3 should be y1,y2,y3 because they are the ordinates.
+      let x1 = c[T0 - 1];
+      let x2 = c[T0];
+      let x3 = c[T0 + 1]
+
+      let a = (x1 + x3 - 2 * x2) / 2;
+      let b = (x3 - x1) / 2
+      if (a) {
+        T0 = T0 - b / (2 * a);
+      }
+
+      return sampleRate/T0;
+    }
+  </script>
+</body>
+</html>
