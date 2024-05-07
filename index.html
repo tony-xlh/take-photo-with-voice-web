@@ -64,7 +64,10 @@
   <script type="text/javascript">
     let cameras = [];
     let microphones = [];
-    var drawNoteVisual;
+    let previousValueToDisplay = 0;
+    let smoothingCount = 0;
+    let smoothingThreshold = 10;
+    let smoothingCountThreshold = 5;
     let analyser;
     let audioCtx;
     window.onload = async function(){
@@ -117,8 +120,8 @@
     async function listMicrophones(){
       let microphoneSelect = document.getElementById("select-microphone");
       let allDevices = await navigator.mediaDevices.enumerateDevices();
-      for (var i=0;i<allDevices.length;i++){
-        var device = allDevices[i];
+      for (let i=0;i<allDevices.length;i++){
+        let device = allDevices[i];
         if (device.kind == 'audioinput'){
           microphones.push(device);
           microphoneSelect.appendChild(new Option(device.label,device.deviceId));
@@ -161,16 +164,16 @@
     function analyse(){
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       analyser = audioCtx.createAnalyser();
-      var stream = document.getElementById("audio").srcObject;
-      var source = audioCtx.createMediaStreamSource(stream);
+      let stream = document.getElementById("audio").srcObject;
+      let source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
       analyser.fftSize = 2048;
-      var bufferLength = analyser.frequencyBinCount;
-      var dataArray = new Uint8Array(bufferLength);
+      let bufferLength = analyser.frequencyBinCount;
+      let dataArray = new Uint8Array(bufferLength);
       analyser.getByteTimeDomainData(dataArray);
       console.log(analyser)
-      var canvas = document.getElementById("oscilloscope");
-      var canvasCtx = canvas.getContext("2d");
+      let canvas = document.getElementById("oscilloscope");
+      let canvasCtx = canvas.getContext("2d");
 
       function draw() {
         if (!document.getElementById("audio").srcObject){
@@ -190,12 +193,12 @@
 
         canvasCtx.beginPath();
 
-        var sliceWidth = (canvas.width * 1.0) / bufferLength;
-        var x = 0;
+        let sliceWidth = (canvas.width * 1.0) / bufferLength;
+        let x = 0;
 
-        for (var i = 0; i < bufferLength; i++) {
-          var v = dataArray[i] / 128.0;
-          var y = (v * canvas.height) / 2;
+        for (let i = 0; i < bufferLength; i++) {
+          let v = dataArray[i] / 128.0;
+          let y = (v * canvas.height) / 2;
 
           if (i === 0) {
             canvasCtx.moveTo(x, y);
@@ -213,57 +216,72 @@
       
     }
 
-    var drawNote = function() {
+    let drawNote = function() {
       console.log("draw note");
       if (!document.getElementById("audio").srcObject){
         return;
       }
-      //drawNoteVisual = requestAnimationFrame(drawNote);
-      var bufferLength = analyser.fftSize;
-      var buffer = new Float32Array(bufferLength);
+      let bufferLength = analyser.fftSize;
+      let buffer = new Float32Array(bufferLength);
       analyser.getFloatTimeDomainData(buffer);
-      var autoCorrelateValue = autoCorrelate(buffer, audioCtx.sampleRate)
-      var previousValueToDisplay = 0;
-      var smoothingCount = 0;
-      var smoothingThreshold = 5;
-      var smoothingCountThreshold = 5;
+      let autoCorrelateValue = autoCorrelate(buffer, audioCtx.sampleRate)
+      
+      
       console.log("autoCorrelateValue:");
       console.log(autoCorrelateValue);
-      // Handle rounding
-      var valueToDisplay = autoCorrelateValue;
-      valueToDisplay = Math.round(valueToDisplay);
       if (autoCorrelateValue === -1) {
         document.getElementById('note').innerText = 'Too quiet...';
-      }else{
-        if (typeof(valueToDisplay) == 'number') {
-          valueToDisplay += ' Hz';
-        }
-        document.getElementById('note').innerText = valueToDisplay;
+        return;
       }
+      // Handle rounding
+      let valueToDisplay = autoCorrelateValue;
+      valueToDisplay = Math.round(valueToDisplay);
+      function noteIsSimilarEnough() {
+        // Check threshold for number, or just difference for notes.
+        let diff = Math.abs(valueToDisplay - previousValueToDisplay);
+        return diff < smoothingThreshold;
+      }
+      // Check if this value has been within the given range for n iterations
+      if (noteIsSimilarEnough()) {
+        if (smoothingCount < smoothingCountThreshold) {
+          smoothingCount++;
+          return;
+        } else {
+          previousValueToDisplay = valueToDisplay;
+          smoothingCount = 0;
+        }
+      } else {
+        previousValueToDisplay = valueToDisplay;
+        smoothingCount = 0;
+        return;
+      }
+
+      valueToDisplay += ' Hz';
+      document.getElementById('note').innerText = valueToDisplay;
     }
     
     // Must be called on analyser.getFloatTimeDomainData and audioContext.sampleRate
     // From https://github.com/cwilso/PitchDetect/pull/23
     function autoCorrelate(buffer, sampleRate) {
       // Perform a quick root-mean-square to see if we have enough signal
-      var SIZE = buffer.length;
-      var sumOfSquares = 0;
-      for (var i = 0; i < SIZE; i++) {
-        var val = buffer[i];
+      let SIZE = buffer.length;
+      let sumOfSquares = 0;
+      for (let i = 0; i < SIZE; i++) {
+        let val = buffer[i];
         sumOfSquares += val * val;
       }
-      var rootMeanSquare = Math.sqrt(sumOfSquares / SIZE)
+      let rootMeanSquare = Math.sqrt(sumOfSquares / SIZE)
       if (rootMeanSquare < 0.01) {
         return -1;
       }
 
       // Find a range in the buffer where the values are below a given threshold.
-      var r1 = 0;
-      var r2 = SIZE - 1;
-      var threshold = 0.2;
+      let r1 = 0;
+      let r2 = SIZE - 1;
+      let threshold = 0.2;
 
       // Walk up for r1
-      for (var i = 0; i < SIZE / 2; i++) {
+      for (let i = 0; i < SIZE / 2; i++) {
         if (Math.abs(buffer[i]) < threshold) {
           r1 = i;
           break;
@@ -271,7 +289,7 @@
       }
 
       // Walk down for r2
-      for (var i = 1; i < SIZE / 2; i++) {
+      for (let i = 1; i < SIZE / 2; i++) {
         if (Math.abs(buffer[SIZE - i]) < threshold) {
           r2 = SIZE - i;
           break;
@@ -283,7 +301,7 @@
       SIZE = buffer.length
 
       // Create a new array of the sums of offsets to do the autocorrelation
-      var c = new Array(SIZE).fill(0);
+      let c = new Array(SIZE).fill(0);
       // For each potential offset, calculate the sum of each buffer value times its offset value
       for (let i = 0; i < SIZE; i++) {
         for (let j = 0; j < SIZE - i; j++) {
@@ -292,34 +310,34 @@
       }
 
       // Find the last index where that value is greater than the next one (the dip)
-      var d = 0;
+      let d = 0;
       while (c[d] > c[d+1]) {
         d++;
       }
 
       // Iterate from that index through the end and find the maximum sum
-      var maxValue = -1;
-      var maxIndex = -1;
-      for (var i = d; i < SIZE; i++) {
+      let maxValue = -1;
+      let maxIndex = -1;
+      for (let i = d; i < SIZE; i++) {
         if (c[i] > maxValue) {
           maxValue = c[i];
           maxIndex = i;
         }
       }
 
-      var T0 = maxIndex;
+      let T0 = maxIndex;
 
       // Not as sure about this part, don't @ me
       // From the original author:
       // interpolation is parabolic interpolation. It helps with precision. We suppose that a parabola pass through the
       // three points that comprise the peak. 'a' and 'b' are the unknowns from the linear equation system and b/(2a) is
       // the "error" in the abscissa. Well x1,x2,x3 should be y1,y2,y3 because they are the ordinates.
-      var x1 = c[T0 - 1];
-      var x2 = c[T0];
-      var x3 = c[T0 + 1]
+      let x1 = c[T0 - 1];
+      let x2 = c[T0];
+      let x3 = c[T0 + 1]
 
-      var a = (x1 + x3 - 2 * x2) / 2;
-      var b = (x3 - x1) / 2
+      let a = (x1 + x3 - 2 * x2) / 2;
+      let b = (x3 - x1) / 2
       if (a) {
         T0 = T0 - b / (2 * a);
       }
