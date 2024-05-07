@@ -21,6 +21,11 @@
     .visuals {
       margin-left: 10px;
     }
+
+    .photos img {
+      max-width: 150px;
+      padding: 5px;
+    }
   </style>
 </head>
 <body>
@@ -59,8 +64,7 @@
       <div id="note"></div>
     </div>
   </div>
-  
-  
+  <div class="photos"></div>
   <script type="text/javascript">
     let cameras = [];
     let microphones = [];
@@ -255,9 +259,23 @@
         smoothingCount = 0;
         return;
       }
-
       valueToDisplay += ' Hz';
       document.getElementById('note').innerText = valueToDisplay;
+      takePhoto();
+    }
+
+    function takePhoto(){
+      let video = document.getElementById("video");
+      let canvas = document.createElement("canvas");
+      let w = video.videoWidth;
+      var h = video.videoHeight;
+      canvas.width  = w;
+      canvas.height = h;
+      let ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+      let img = document.createElement("img");
+      img.src = canvas.toDataURL();
+      document.getElementsByClassName("photos")[0].appendChild(img);
     }
     
     // Must be called on analyser.getFloatTimeDomainData and audioContext.sampleRate
