@@ -18,6 +18,18 @@
       max-width: 100%;
       height: 480px;
     }
+
+    .voice-icon {
+      background-image: url("./voice.svg");
+      background-position: top;
+      background-size: contain;
+      background-repeat: no-repeat;
+      filter: invert(1);
+    }
+
+    .voice-icon.enabled {
+      filter: invert(1) sepia(100%) saturate(100) hue-rotate(1400deg);
+    }
   </style>
 </head>
 <body>
@@ -208,6 +220,16 @@
                           type: "CameraResolution",
                           className: "ddv-capture-viewer-resolution",
                       },
+                      {
+                        type: Dynamsoft.DDV.Elements.Button,
+                        className: "voice-icon",
+                        style: {
+                          display: "flex",
+                        },
+                        events: {
+                          click: "enableVoiceDetection",
+                        },
+                      },
                       Dynamsoft.DDV.Elements.Flashlight,
                   ],
               },
@@ -333,6 +355,18 @@
           switchViewer(0,1,0);
       });
 
+      captureViewer.on("enableVoiceDetection",e => {
+        console.log("click");
+        let icon = document.getElementsByClassName("voice-icon")[0];
+        if (icon.classList.contains("enabled")) {
+          icon.classList.remove("enabled");
+          toggleVoiceDetection(false);
+        }else{
+          icon.classList.add("enabled");
+          toggleVoiceDetection(true);
+        }
+      });
+
       // Create a perspective viewer
       perspectiveViewer = new Dynamsoft.DDV.PerspectiveViewer({
           container: "container",
@@ -413,8 +447,20 @@
       });
     }
 
-    function startVoiceDetection(){
-
+    async function toggleVoiceDetection(enabled){
+      let audio = document.getElementById("audio");
+      if (enabled) {
+        if (!audio.srcObject) {
+          let selectedMicrophone = microphones[document.getElementById("select-microphone").selectedIndex];
+          const audioConstraints = {video: false, audio: {deviceId: selectedMicrophone}};
+          const audioStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
+          audio.srcObject = audioStream;
+          analyse();
+        }
+      }else{
+        closeStream(audio.srcObject);
+        audio.srcObject = null
+      }
     }
 
     async function listMicrophones(){
@@ -471,49 +517,15 @@
       let bufferLength = analyser.frequencyBinCount;
       let dataArray = new Uint8Array(bufferLength);
       analyser.getByteTimeDomainData(dataArray);
-      console.log(analyser)
-      let canvas = document.getElementById("oscilloscope");
-      let canvasCtx = canvas.getContext("2d");
-
-      function draw() {
+      function analyseClip() {
         if (!document.getElementById("audio").srcObject){
           return;
         }
-        drawVisual = requestAnimationFrame(draw);
+        drawVisual = requestAnimationFrame(analyseClip);
         drawNote();
         analyser.getByteTimeDomainData(dataArray);
-        //console.log("draw");
-        //console.log(dataArray);
-
-        canvasCtx.fillStyle = "rgb(200, 200, 200)";
-        canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-
-        canvasCtx.lineWidth = 2;
-        canvasCtx.strokeStyle = "rgb(0, 0, 0)";
-
-        canvasCtx.beginPath();
-
-        let sliceWidth = (canvas.width * 1.0) / bufferLength;
-        let x = 0;
-
-        for (let i = 0; i < bufferLength; i++) {
-          let v = dataArray[i] / 128.0;
-          let y = (v * canvas.height) / 2;
-
-          if (i === 0) {
-            canvasCtx.moveTo(x, y);
-          } else {
-            canvasCtx.lineTo(x, y);
-          }
-
-          x += sliceWidth;
-        }
-
-        canvasCtx.lineTo(canvas.width, canvas.height / 2);
-        canvasCtx.stroke();
       }
-      draw();
-      
+      analyseClip();
     }
 
     let drawNote = function() {
@@ -530,7 +542,7 @@
       console.log("autoCorrelateValue:");
       console.log(autoCorrelateValue);
       if (autoCorrelateValue === -1) {
-        document.getElementById('note').innerText = 'Too quiet...';
+        //'Too quiet...';
         return;
       }
       // Handle rounding
@@ -555,29 +567,17 @@
         smoothingCount = 0;
         return;
       }
-      valueToDisplay += ' Hz';
-      document.getElementById('note').innerText = valueToDisplay;
       takePhoto();
     }
 
-    function takePhoto(){
+    async function takePhoto(){
       let currentTime = Date.now();
       if (currentTime - photoTakenTime < 1000*2) {
         console.log("within 2 seconds since last capture");
         return;
       }
+      await captureViewer.capture();
       photoTakenTime = currentTime;
-      let video = document.getElementById("video");
-      let canvas = document.createElement("canvas");
-      let w = video.videoWidth;
-      var h = video.videoHeight;
-      canvas.width  = w;
-      canvas.height = h;
-      let ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, w, h);
-      let img = document.createElement("img");
-      img.src = canvas.toDataURL();
-      document.getElementsByClassName("photos")[0].appendChild(img);
     }
     
     // Must be called on analyser.getFloatTimeDomainData and audioContext.sampleRate
