@@ -3,19 +3,10 @@
 <head>
   <title>Take a Photo with Your Voice</title>
   <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=0" />
-  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-core@3.0.33/dist/core.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-camera-enhancer@4.0.2/dist/dce.js"></script>
   <style>
-    #enhancerUIContainer {
+    #video {
       height: 150px;
       width: 300px;
-      position: relative;
-    }
-
-    .dce-video-container {
-      width: 100%;
-      height: 100%;
-      position: absolute;
     }
 
     #oscilloscope {
@@ -29,6 +20,11 @@
     
     .visuals {
       margin-left: 10px;
+    }
+
+    .photos img {
+      max-width: 150px;
+      padding: 5px;
     }
   </style>
 </head>
@@ -52,11 +48,12 @@
     </select>
   </label>
   <button onclick="startCameraAndMicrophone();">Start</button>
+  <button onclick="stopCameraAndMicrophone();">Stop</button>
   <button onclick="analyse();">Analyse</button>
   <div class="output">
     <div class="devices">
-      <div id="enhancerUIContainer" class="main-view">
-        <div class="dce-video-container"></div>
+      <div>
+        <video controls autoplay playsinline id="video"></video>
       </div>
       <div>
         <audio autoplay controls id="audio"></audio>
@@ -64,17 +61,21 @@
     </div>
     <div class="visuals">
       <canvas id="oscilloscope"></canvas>
+      <div id="note"></div>
     </div>
   </div>
-  
-  
+  <div class="photos"></div>
   <script type="text/javascript">
-    let cameraEnhancer;
     let cameras = [];
     let microphones = [];
+    let previousValueToDisplay = 0;
+    let smoothingCount = 0;
+    let smoothingThreshold = 10;
+    let smoothingCountThreshold = 5;
+    let analyser;
+    let audioCtx;
     window.onload = async function(){
-      let cameraView = await Dynamsoft.DCE.CameraView.createInstance(document.getElementById("enhancerUIContainer"));
-      cameraEnhancer = await Dynamsoft.DCE.CameraEnhancer.createInstance(cameraView); //bind the view to the enhancer
+      await requestCameraPermission();
       await listCameras();
       try {
         await requestMicroPhonePermission();
@@ -82,42 +83,64 @@
       } catch (error) {
         alert("Microphones not found.");
       }
-      
     }
 
     async function listCameras(){
       let cameraSelect = document.getElementById("select-camera");
-      cameras = await cameraEnhancer.getAllCameras();
-      for (let index = 0; index < cameras.length; index++) {
-        const camera = cameras[index];
-        cameraSelect.appendChild(new Option(camera.label,camera.deviceId));
+      let allDevices = await navigator.mediaDevices.enumerateDevices();
+      for (let i = 0; i < allDevices.length; i++){
+        let device = allDevices[i];
+        if (device.kind == 'videoinput'){
+          cameras.push(device);
+          cameraSelect.appendChild(new Option(device.label,device.deviceId));
+        }
       }
     }
 
     async function startCameraAndMicrophone(){
       let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
+      closeStream(document.getElementById("video").srcObject);
       let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
       let width = parseInt(selectedResolution.split("x")[0]);
       let height = parseInt(selectedResolution.split("x")[1]);
-      await cameraEnhancer.selectCamera(selectedCamera);
-      await cameraEnhancer.setResolution({width:width, height:height});
-      await cameraEnhancer.open();
+      const videoConstraints = {video: {deviceId: selectedCamera}, audio: false};
+      const cameraStream = await navigator.mediaDevices.getUserMedia(videoConstraints);
+      document.getElementById("video").srcObject = cameraStream;
+
       let selectedMicrophone = microphones[document.getElementById("select-microphone").selectedIndex];
       closeStream(document.getElementById("audio").srcObject);
-      const constraints = {video: false, audio: {deviceId: selectedMicrophone}};
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      document.getElementById("audio").srcObject = stream;
+      const audioConstraints = {video: false, audio: {deviceId: selectedMicrophone}};
+      const audioStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
+      document.getElementById("audio").srcObject = audioStream;
+    }
+
+    function stopCameraAndMicrophone(){
+      closeStream(document.getElementById("video").srcObject);
+      closeStream(document.getElementById("audio").srcObject);
+      document.getElementById("video").srcObject = null;
+      document.getElementById("audio").srcObject = null
     }
 
     async function listMicrophones(){
       let microphoneSelect = document.getElementById("select-microphone");
       let allDevices = await navigator.mediaDevices.enumerateDevices();
-      for (var i=0;i<allDevices.length;i++){
-        var device = allDevices[i];
+      for (let i=0;i<allDevices.length;i++){
+        let device = allDevices[i];
         if (device.kind == 'audioinput'){
           microphones.push(device);
           microphoneSelect.appendChild(new Option(device.label,device.deviceId));
         }
+      }
+    }
+
+    async function requestCameraPermission() {
+      try {
+        const constraints = {video: true, audio: false};
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        closeStream(stream);
+      } catch (error) {
+        console.log(error);
+        throw error;
       }
     }
 
@@ -143,26 +166,28 @@
     }
 
     function analyse(){
-      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      var analyser = audioCtx.createAnalyser();
-      var stream = document.getElementById("audio").srcObject;
-      var source = audioCtx.createMediaStreamSource(stream);
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioCtx.createAnalyser();
+      let stream = document.getElementById("audio").srcObject;
+      let source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
       analyser.fftSize = 2048;
-      var bufferLength = analyser.frequencyBinCount;
-      var dataArray = new Uint8Array(bufferLength);
+      let bufferLength = analyser.frequencyBinCount;
+      let dataArray = new Uint8Array(bufferLength);
       analyser.getByteTimeDomainData(dataArray);
-
-      var canvas = document.getElementById("oscilloscope");
-      var canvasCtx = canvas.getContext("2d");
+      console.log(analyser)
+      let canvas = document.getElementById("oscilloscope");
+      let canvasCtx = canvas.getContext("2d");
 
       function draw() {
-        
+        if (!document.getElementById("audio").srcObject){
+          return;
+        }
         drawVisual = requestAnimationFrame(draw);
-
+        drawNote();
         analyser.getByteTimeDomainData(dataArray);
-        console.log("draw");
-        console.log(dataArray);
+        //console.log("draw");
+        //console.log(dataArray);
 
         canvasCtx.fillStyle = "rgb(200, 200, 200)";
         canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
@@ -172,12 +197,12 @@
 
         canvasCtx.beginPath();
 
-        var sliceWidth = (canvas.width * 1.0) / bufferLength;
-        var x = 0;
+        let sliceWidth = (canvas.width * 1.0) / bufferLength;
+        let x = 0;
 
-        for (var i = 0; i < bufferLength; i++) {
-          var v = dataArray[i] / 128.0;
-          var y = (v * canvas.height) / 2;
+        for (let i = 0; i < bufferLength; i++) {
+          let v = dataArray[i] / 128.0;
+          let y = (v * canvas.height) / 2;
 
           if (i === 0) {
             canvasCtx.moveTo(x, y);
@@ -192,8 +217,151 @@
         canvasCtx.stroke();
       }
       draw();
+      
     }
-     
+
+    let drawNote = function() {
+      console.log("draw note");
+      if (!document.getElementById("audio").srcObject){
+        return;
+      }
+      let bufferLength = analyser.fftSize;
+      let buffer = new Float32Array(bufferLength);
+      analyser.getFloatTimeDomainData(buffer);
+      let autoCorrelateValue = autoCorrelate(buffer, audioCtx.sampleRate)
+      
+      
+      console.log("autoCorrelateValue:");
+      console.log(autoCorrelateValue);
+      if (autoCorrelateValue === -1) {
+        document.getElementById('note').innerText = 'Too quiet...';
+        return;
+      }
+      // Handle rounding
+      let valueToDisplay = autoCorrelateValue;
+      valueToDisplay = Math.round(valueToDisplay);
+      function noteIsSimilarEnough() {
+        // Check threshold for number, or just difference for notes.
+        let diff = Math.abs(valueToDisplay - previousValueToDisplay);
+        return diff < smoothingThreshold;
+      }
+      // Check if this value has been within the given range for n iterations
+      if (noteIsSimilarEnough()) {
+        if (smoothingCount < smoothingCountThreshold) {
+          smoothingCount++;
+          return;
+        } else {
+          previousValueToDisplay = valueToDisplay;
+          smoothingCount = 0;
+        }
+      } else {
+        previousValueToDisplay = valueToDisplay;
+        smoothingCount = 0;
+        return;
+      }
+      valueToDisplay += ' Hz';
+      document.getElementById('note').innerText = valueToDisplay;
+      takePhoto();
+    }
+
+    function takePhoto(){
+      let video = document.getElementById("video");
+      let canvas = document.createElement("canvas");
+      let w = video.videoWidth;
+      var h = video.videoHeight;
+      canvas.width  = w;
+      canvas.height = h;
+      let ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+      let img = document.createElement("img");
+      img.src = canvas.toDataURL();
+      document.getElementsByClassName("photos")[0].appendChild(img);
+    }
+    
+    // Must be called on analyser.getFloatTimeDomainData and audioContext.sampleRate
+    // From https://github.com/cwilso/PitchDetect/pull/23
+    function autoCorrelate(buffer, sampleRate) {
+      // Perform a quick root-mean-square to see if we have enough signal
+      let SIZE = buffer.length;
+      let sumOfSquares = 0;
+      for (let i = 0; i < SIZE; i++) {
+        let val = buffer[i];
+        sumOfSquares += val * val;
+      }
+      let rootMeanSquare = Math.sqrt(sumOfSquares / SIZE)
+      if (rootMeanSquare < 0.01) {
+        return -1;
+      }
+
+      // Find a range in the buffer where the values are below a given threshold.
+      let r1 = 0;
+      let r2 = SIZE - 1;
+      let threshold = 0.2;
+
+      // Walk up for r1
+      for (let i = 0; i < SIZE / 2; i++) {
+        if (Math.abs(buffer[i]) < threshold) {
+          r1 = i;
+          break;
+        }
+      }
+
+      // Walk down for r2
+      for (let i = 1; i < SIZE / 2; i++) {
+        if (Math.abs(buffer[SIZE - i]) < threshold) {
+          r2 = SIZE - i;
+          break;
+        }
+      }
+
+      // Trim the buffer to these ranges and update SIZE.
+      buffer = buffer.slice(r1, r2);
+      SIZE = buffer.length
+
+      // Create a new array of the sums of offsets to do the autocorrelation
+      let c = new Array(SIZE).fill(0);
+      // For each potential offset, calculate the sum of each buffer value times its offset value
+      for (let i = 0; i < SIZE; i++) {
+        for (let j = 0; j < SIZE - i; j++) {
+          c[i] = c[i] + buffer[j] * buffer[j+i]
+        }
+      }
+
+      // Find the last index where that value is greater than the next one (the dip)
+      let d = 0;
+      while (c[d] > c[d+1]) {
+        d++;
+      }
+
+      // Iterate from that index through the end and find the maximum sum
+      let maxValue = -1;
+      let maxIndex = -1;
+      for (let i = d; i < SIZE; i++) {
+        if (c[i] > maxValue) {
+          maxValue = c[i];
+          maxIndex = i;
+        }
+      }
+
+      let T0 = maxIndex;
+
+      // Not as sure about this part, don't @ me
+      // From the original author:
+      // interpolation is parabolic interpolation. It helps with precision. We suppose that a parabola pass through the
+      // three points that comprise the peak. 'a' and 'b' are the unknowns from the linear equation system and b/(2a) is
+      // the "error" in the abscissa. Well x1,x2,x3 should be y1,y2,y3 because they are the ordinates.
+      let x1 = c[T0 - 1];
+      let x2 = c[T0];
+      let x3 = c[T0 + 1]
+
+      let a = (x1 + x3 - 2 * x2) / 2;
+      let b = (x3 - x1) / 2
+      if (a) {
+        T0 = T0 - b / (2 * a);
+      }
+
+      return sampleRate/T0;
+    }
   </script>
 </body>
 </html>
