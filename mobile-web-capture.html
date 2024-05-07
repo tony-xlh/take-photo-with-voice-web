@@ -67,6 +67,8 @@
     let captureViewer;
     let perspectiveViewer;
     let editViewer;
+    let interval;
+    let processing = false;
     window.onload = async function(){
       await initMobileWebCapture();
       await requestCameraPermission();
@@ -455,9 +457,10 @@
           const audioConstraints = {video: false, audio: {deviceId: selectedMicrophone}};
           const audioStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
           audio.srcObject = audioStream;
-          analyse();
+          startVoiceDetection();
         }
       }else{
+        stopVoiceDetection();
         closeStream(audio.srcObject);
         audio.srcObject = null
       }
@@ -507,67 +510,65 @@
       }
     }
 
-    function analyse(){
+    function startVoiceDetection(){
+      if (!document.getElementById("audio").srcObject){
+        return;
+      }
+      stopVoiceDetection();
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       analyser = audioCtx.createAnalyser();
       let stream = document.getElementById("audio").srcObject;
       let source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
       analyser.fftSize = 2048;
-      let bufferLength = analyser.frequencyBinCount;
-      let dataArray = new Uint8Array(bufferLength);
-      analyser.getByteTimeDomainData(dataArray);
-      function analyseClip() {
-        if (!document.getElementById("audio").srcObject){
+
+      const analyse = () => {
+        processing = true;
+        let bufferLength = analyser.fftSize;
+        let buffer = new Float32Array(bufferLength);
+        analyser.getFloatTimeDomainData(buffer);
+        let autoCorrelateValue = autoCorrelate(buffer, audioCtx.sampleRate);
+        processing = false;
+        console.log("autoCorrelateValue:");
+        console.log(autoCorrelateValue);
+        if (autoCorrelateValue === -1) {
+          //'Too quiet...';
           return;
         }
-        drawVisual = requestAnimationFrame(analyseClip);
-        drawNote();
-        analyser.getByteTimeDomainData(dataArray);
-      }
-      analyseClip();
-    }
-
-    let drawNote = function() {
-      console.log("draw note");
-      if (!document.getElementById("audio").srcObject){
-        return;
-      }
-      let bufferLength = analyser.fftSize;
-      let buffer = new Float32Array(bufferLength);
-      analyser.getFloatTimeDomainData(buffer);
-      let autoCorrelateValue = autoCorrelate(buffer, audioCtx.sampleRate)
-      
-      
-      console.log("autoCorrelateValue:");
-      console.log(autoCorrelateValue);
-      if (autoCorrelateValue === -1) {
-        //'Too quiet...';
-        return;
-      }
-      // Handle rounding
-      let valueToDisplay = autoCorrelateValue;
-      valueToDisplay = Math.round(valueToDisplay);
-      function noteIsSimilarEnough() {
-        // Check threshold for number, or just difference for notes.
-        let diff = Math.abs(valueToDisplay - previousValueToDisplay);
-        return diff < smoothingThreshold;
-      }
-      // Check if this value has been within the given range for n iterations
-      if (noteIsSimilarEnough()) {
-        if (smoothingCount < smoothingCountThreshold) {
-          smoothingCount++;
-          return;
+        // Handle rounding
+        let valueToDisplay = autoCorrelateValue;
+        valueToDisplay = Math.round(valueToDisplay);
+        function noteIsSimilarEnough() {
+          // Check threshold for number, or just difference for notes.
+          let diff = Math.abs(valueToDisplay - previousValueToDisplay);
+          return diff < smoothingThreshold;
+        }
+        // Check if this value has been within the given range for n iterations
+        if (noteIsSimilarEnough()) {
+          if (smoothingCount < smoothingCountThreshold) {
+            smoothingCount++;
+            console.log("threshold not meet");
+            return;
+          } else {
+            previousValueToDisplay = valueToDisplay;
+            smoothingCount = 0;
+          }
         } else {
           previousValueToDisplay = valueToDisplay;
           smoothingCount = 0;
+          console.log("not similar");
+          return;
         }
-      } else {
-        previousValueToDisplay = valueToDisplay;
-        smoothingCount = 0;
-        return;
+        console.log("take photo");
+        takePhoto();
       }
-      takePhoto();
+      interval = setInterval(analyse,0)
+    }
+
+    function stopVoiceDetection(){
+      processing = false;
+      previousValueToDisplay = 0;
+      clearInterval(interval);
     }
 
     async function takePhoto(){
